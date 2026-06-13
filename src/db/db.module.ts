@@ -11,7 +11,7 @@ import { config } from 'node:process';
       useFactory:(configservice : ConfigService)=>({
         uri : configservice.get('DB_URI')
       })
-    })
+    }),
   ],
   controllers: [],
   providers: [],

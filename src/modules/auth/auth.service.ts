@@ -1,26 +1,52 @@
-import { Injectable } from '@nestjs/common';
-import { CreateAuthDto } from './dto/create-auth.dto';
-import { UpdateAuthDto } from './dto/update-auth.dto';
+import { BadRequestException, HttpException, HttpStatus, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { RegisterDto } from './dto/register.dto';
+import { InjectModel } from '@nestjs/mongoose';
+import { User, UserDocument } from '../users/entities/user.entity';
+import { Model, Types } from 'mongoose';
+import { RefToken } from './entities/refreshToken.schema';
+import { LoginDto } from './dto/login.dto';
+import * as bcrypt from 'bcrypt';
+import {v4 as uuid} from 'uuid'
+import { JwtService } from '@nestjs/jwt';
+
 
 @Injectable()
 export class AuthService {
-  create(createAuthDto: CreateAuthDto) {
-    return 'This action adds a new auth';
+  constructor(
+    @InjectModel(User.name) private readonly UserRepo : Model<UserDocument>,
+    @InjectModel(RefToken.name) private readonly refTokenRepo : Model<RefToken>,
+    private readonly jwt : JwtService
+  ){}
+
+  async login(dto : LoginDto){
+    const user = await this.UserRepo.findOne({email : dto.email})                     
+    if (!user) throw new UnauthorizedException('email or password incorrect')         
+    const passwordMatch = await bcrypt.compare(dto.password , user.password)        
+    if(!passwordMatch) throw new UnauthorizedException('email or password incorrect') 
+    return await this.generateTokens(user._id)                                      
   }
 
-  findAll() {
-    return `This action returns all auth`;
+  async generateTokens (userId : Types.ObjectId){                                       
+    const accessToken = this.jwt.sign({userId}, {expiresIn : '15m'})                    
+    const refreshToken =  uuid()                                                        
+    await this.storefreshToken(refreshToken, userId)                                   
+    return {accessToken, refreshToken}                                                  
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} auth`;
+  async storefreshToken(token : string, userId : Types.ObjectId){                      
+     await this.refTokenRepo.updateOne(
+       {userId}, 
+       {$set: {token, expiryDate: new Date(Date.now() + (7*24*60**2*1000))}}, 
+       {upsert : true}
+     )
   }
 
-  update(id: number, updateAuthDto: UpdateAuthDto) {
-    return `This action updates a #${id} auth`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} auth`;
+  async refreshAll(refresh_token : string){                                            
+    const token = await this.refTokenRepo.findOne({                                
+      token : refresh_token,                                                         
+      expiryDate : {$gte : new Date()}                                              
+    }) 
+    if(!token) throw new UnauthorizedException()                                      
+      return await this.generateTokens(token.userId)                                   
   }
 }
